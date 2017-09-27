@@ -8,144 +8,453 @@ Created on Fri Sep 22 13:15:43 2017
 import tifffile as tiff
 import os, glob
 import numpy as np
-import random
+import datetime, time
+import matplotlib.pyplot as plt
+import gc
 
+from plot_learning_curves import acc_loss_visual
+from patch_obtain import get_patches_train, get_patches_test_with_label, get_patches_test_without_label
+from result_evaluate import intersection_over_union, overall_accuracy
+from log_writing import log_write
 
+from keras.models import Model
+from keras.layers import Input, MaxPooling2D, UpSampling2D
+from keras.layers.merge import concatenate
+from keras.layers.convolutional import Conv2D
+from keras.optimizers import Adam
+from keras.models import model_from_json
+from keras import backend as K
 
-def image_read(path, form, name_read=False):
+#import gc
+
+smooth = 1e-12
+
+def train_image_read(path, form, *args, vector_read = False, name_read=False):
     """
     Read matched raster and vector images
-    In case many images in path, image will be 4 dim
     
     Parameters
     ----------
         path : str
         form : str
+        *args : vector_max
+            to change label into 1
+        vector_read : bool
+            read vector image
         name_read : bool
     Returns
     -------
-        image : uint8 
-            when many images in path, image will be 4dim using tiff.imread
-        image_name : list
+        image_list : list 
+        image_names : list
     """
-    image_name = sorted(glob.glob(path + form)) 
-    image = tiff.imread(image_name)
+    image_names = sorted(glob.glob(path + form))
+    image_list = []
+    for img_name in image_names:
+        image = tiff.imread(img_name)
+        image_list.append(image)
+    if vector_read:
+        image_list = list(map(lambda x: x // args[0], image_list))        
     if name_read == False:
-        return image
+        return image_list
     else:
-        return image, image_name
+        return image_list, image_names
 
-
-
-def get_patches(raster_images,  vector_images, *args, aug_random_slide = False, aug_color = False, aug_rotate = False, **kwargs):
+def test_image_read(path, form, idx, *args, vector_read = False, name_read=False):
     """
-    Get patches from raster and vector images
-    Data augmentation can be used
+    Read matched raster and vector images
     
     Parameters
     ----------
-    raster_images : uint8
-        3d(when only one raster image) or 4d
-    vector_images : uint8
-        2d(when only one vector image) or 3d
-    *args : data_aug 
-        data_aug[0]: slide num, data_aug[2]: color aug, data_aug[3]: roate aug
-    aug_random_slide : bool
-        data augmentation, randomly slide window in the image
-    aug_color : bool
-        data augmentation, change color
-    aug_rotate : bool
-        data augmentation, rotate image
-    **kwargs :
-        'patch_size' and 'patch_slide_num'
-        
+        path : str
+        form : str
+        *args : vector_max
+            to change label into 1
+        vector_read : bool
+            read vector image
+        name_read : bool
     Returns
     -------
-    raster_patch_list : list
-        4d patchs (num, patch_size, patch_size, 3)
-    vector_patch_list : list
-        3d patchs (num, patch_size, patch_size)
-    
-    Examples
-    --------
-    data_aug = 1000, 0.5, 0.5
-        Add 1000 randomly patches, 50% color change, 50% rotate change
-        But that is conclusion relation:
-            in 1000 augmenation, 250 slide only, 250 color change only, 250 rotate only, 
-            250 rotate and color change
+        image_list : list 
+        image base name : list
     """
-    patch_size = kwargs['patch_size']
-    # change ranster_images into 4d, vector_images into 3d
-    if raster_images.ndim == 3:
-        raster_images = np.expand_dims(raster_images, 0)
-    if vector_images.ndim == 2:
-        vector_images = np.expand_dims(vector_images, 0)
+    image_name = sorted(glob.glob(path + form))[idx]
+    image = tiff.imread(image_name)
+    if vector_read:
+        image = image // args[0]        
+    if name_read == False:
+        return image
+    else:
+        return image, os.path.basename(image_name)[:-4]
+
+def jaccard_coef(y_true, y_pred):
+
+    intersection = K.sum(y_true * y_pred, axis=[0, -1, -2])
+    sum_ = K.sum(y_true + y_pred, axis=[0, -1, -2])
+
+    jac = (intersection + smooth) / (sum_ - intersection + smooth)
+
+    return K.mean(jac)
+
+def jaccard_coef_int(y_true, y_pred):
+
+    y_pred_pos = K.round(K.clip(y_pred, 0, 1))
+
+    intersection = K.sum(y_true * y_pred_pos, axis=[0, -1, -2])
+    sum_ = K.sum(y_true + y_pred_pos, axis=[0, -1, -2])
+    jac = (intersection + smooth) / (sum_ - intersection + smooth)
+    return K.mean(jac)
+
+def get_unet(patch_size, N_Cls):
+    """
+    Build a mini U-Net architecture
+    Return U-Net model
     
-    image_num = raster_images.shape[0]
-    raster_patch_list = []
-    vector_patch_list = []
+    Notes
+    -----
+    Shape of output image is similar with input image
+    Output img bands: N_Cls
+    Upsampling is important
+#    """
+    ISZ = patch_size    
+    inputs = Input((ISZ, ISZ, 3))
+    conv1 = Conv2D(32, (3, 3), activation='relu', padding='same')(inputs)
+    conv1 = Conv2D(32, (3, 3), activation='relu', padding='same')(conv1)
+    pool1 = MaxPooling2D(pool_size=(2, 2))(conv1)
+
+    conv2 = Conv2D(64, (3, 3), activation='relu', padding='same')(pool1)
+    conv2 = Conv2D(64, (3, 3), activation='relu', padding='same')(conv2)
+    pool2 = MaxPooling2D(pool_size=(2, 2))(conv2)
+
+    conv3 = Conv2D(128, (3, 3), activation='relu', padding='same')(pool2)
+    conv3 = Conv2D(128, (3, 3), activation='relu', padding='same')(conv3)
+    pool3 = MaxPooling2D(pool_size=(2, 2))(conv3)
+
+    conv4 = Conv2D(256, (3, 3), activation='relu', padding='same')(pool3)
+    conv4 = Conv2D(256, (3, 3), activation='relu', padding='same')(conv4)
+    pool4 = MaxPooling2D(pool_size=(2, 2))(conv4)
+
+    conv5 = Conv2D(512, (3, 3), activation='relu', padding='same')(pool4)
+    conv5 = Conv2D(512, (3, 3), activation='relu', padding='same')(conv5)
+
+    up6 = concatenate([UpSampling2D(size=(2, 2))(conv5), conv4], axis=3)
+    conv6 = Conv2D(256, (3, 3), activation='relu', padding='same')(up6)
+    conv6 = Conv2D(256, (3, 3), activation='relu', padding='same')(conv6)
     
-    for img_idx in range(image_num):
-        raster_image = raster_images[img_idx]
-        vector_image = vector_images[img_idx]
+    up7 = concatenate([UpSampling2D(size=(2, 2))(conv6), conv3], axis=3)
+    conv7 = Conv2D(128, (3, 3), activation='relu', padding='same')(up7)
+    conv7 = Conv2D(128, (3, 3), activation='relu', padding='same')(conv7)
+
+    up8 = concatenate([UpSampling2D(size=(2, 2))(conv7), conv2], axis=3)
+    conv8 = Conv2D(64, (3, 3), activation='relu', padding='same')(up8)
+    conv8 = Conv2D(64, (3, 3), activation='relu', padding='same')(conv8)
+
+    up9 = concatenate([UpSampling2D(size=(2, 2))(conv8), conv1], axis=3)
+    conv9 = Conv2D(32, (3, 3), activation='relu', padding='same')(up9)
+    conv9 = Conv2D(32, (3, 3), activation='relu', padding='same')(conv9)
+
+    conv10 = Conv2D(N_Cls, (1, 1), activation='softmax')(conv9)
+    model = Model(inputs=inputs, outputs=conv10)
+    model.compile(optimizer=Adam(), loss='binary_crossentropy', metrics=[jaccard_coef, jaccard_coef_int, 'accuracy'])
+    return model  
+
+def save_model(model, model_path, file_time_global):
+    """
+    Save model into model_path
+    """
+    json_string=model.to_json()
+    if not os.path.isdir(model_path):
+        os.mkdir(model_path)
+    modle_path=os.path.join(model_path,'architecture'+'_'+file_time_global+'.json')
+    open(modle_path,'w').write(json_string)
+    model.save_weights(os.path.join(model_path,'model_weights'+'_'+ file_time_global+'.h5'),overwrite= True )
     
-        rows_num, cols_num = raster_image.shape[0]//patch_size, raster_image.shape[1]//patch_size
-        for i in range(rows_num):
-            for j in range(cols_num):
-#                idx = i * cols_num + j
-                raster_patch = raster_image[i*patch_size:(i+1)*patch_size, j*patch_size:(j+1)*patch_size]
-                raster_patch_list.append(raster_patch)
+def read_model(model_path, file_time_global):
+    """
+    Read model from model_path
+    """
+    model=model_from_json(open(os.path.join(model_path,'architecture'+'_'+ file_time_global+'.json')).read())
+    model.load_weights(os.path.join(model_path,'model_weights'+'_'+file_time_global+'.h5'))
+    return model
 
-                vector_patch = vector_image[i*patch_size:(i+1)*patch_size, j*patch_size:(j+1)*patch_size]
-                vector_patch_list.append(vector_patch)
+def image_test(model, test_X):
+    """
+    Image test
+    Convert predicted result into 3dim: (patch_num, patch_size, patch_size)
+    
+    parameters
+    ----------
+    model :
+    test_X : uint8
+        4dim (patch_num, patch_size, patch_size, 3)
+    Returns
+    -------
+    pred : float32
+        3dim (patch_num, patch_size, patch_size)
+    """
+    pred = model.predict(test_X)
+    pred = np.argmax(pred, axis = -1)
+    return pred
 
-        if aug_random_slide:
-            patch_slide_num = args[0][0]
-            is2 = int(1.0 * patch_size)
-            xm, ym = raster_image.shape[0] - is2, raster_image.shape[1] - is2
-            
-            raster_patch_slide = np.zeros((patch_slide_num, is2, is2, 3))
-            vector_patch_slide = np.zeros((patch_slide_num, is2, is2))
-            
-            for i in range(patch_slide_num):
-                xc = random.randint(0, xm)
-                yc = random.randint(0, ym)
-                
-                im = raster_image[xc:xc + is2, yc:yc + is2]
-                mk = vector_image[xc:xc + is2, yc:yc + is2]
-                
-                if aug_color:
-                    if random.uniform(0, 1) > args[0][1]:
-                        im = im[:,:,::-1]
+def patch_evaluate(pred_y, image_name, *args, test_label = True):
+    """
+    Calculate result of each patch in image respectively
+    Save as a dictionary
+    
+    Parameters
+    ----------
+        test_y : uint8 
+            test patches labels
+        pred_y : uint8
+            pred patches labels
+        image_name : str
+    Returns
+    -------
+        dic_info : dict
+            result details, keys : 
+                'name', 'patch_num', 'time', 'IoU', 'Accuracy', 'pred_y', 'test_y'
+    """
+    print('Evaluating result in each patch')
+    if test_label:
+        test_y = args[0]
+        i_o_u_list = []
+        acc_list = []
+        test_time = []
+        for idx_patch in range(test_y.shape[0]):
+            beg = time.time()
+            i_o_u = intersection_over_union(test_y[idx_patch], pred_y[idx_patch], smooth)
+            acc = overall_accuracy(test_y[idx_patch], pred_y[idx_patch])
+            i_o_u_list.append(i_o_u)
+            acc_list.append(acc)
+            time_test = (time.time() - beg)
+            test_time.append(time_test)
+        dic_info = {'name': image_name, 
+           'patch_num': len(pred_y), 
+           'time': test_time,
+           'IoU': i_o_u_list,
+           'Accuracy': acc_list,
+           'pred_y': pred_y,
+           'test_y': test_y}
+    else:
+        dic_info = {'name': image_name, 
+           'patch_num': len(pred_y), 
+           'pred_y': pred_y}        
+    return dic_info
 
-                if aug_rotate:
-                    if random.uniform(0, 1) > args[0][2]:
-                        im = im[::-1]
-                        mk = mk[::-1]
+def patch_result_save(pred_result, result_path, time_global, model_name, image_name):
+    separate_result_file = os.path.join(result_path, time_global)
+    if not os.path.isdir(separate_result_file):
+        os.mkdir(separate_result_file)
+    np.save(os.path.join(separate_result_file,'patch_'+ image_name + '_'+ model_name+'_.npy'), pred_result)
 
-                raster_patch_slide[i] = im
-                vector_patch_slide[i] = mk
 
-            raster_patch_list.extend(raster_patch_slide)
-            vector_patch_list.extend(vector_patch_slide)
-    return raster_patch_list, vector_patch_list
+def patch_combine(image, small_images, patch_size, result_path, time_global, image_name, model_name):
+    """
+    Combine small images into a big one
+    boundary image only choose part value
+    Returns big combined image
+    
+    Parameters
+    ----------
+    image : np.array
+        used to get combined image shape
+    small_images : list 
+        splited small images list
+    patch_size
+    
+    Returns
+    -------
+    combined_image : np.array
+        output combined image
+    """
+    separate_result_file = os.path.join(result_path, time_global)
+    if not os.path.isdir(separate_result_file):
+        os.mkdir(separate_result_file)
+    
+    row_num = int(np.ceil(image.shape[0] / patch_size))
+    col_num = int(np.ceil(image.shape[1] / patch_size))
+    combined_image = np.zeros((image.shape[0], image.shape[1]))
+    row_max, col_max = row_num - 1, col_num - 1
+    for row in range(row_num):
+        for col in range(col_num):
+            idx = row * col_num + col
+            if row != row_max and col != col_max:
+                combined_image[row*patch_size:(row+1)*patch_size, col*patch_size:(col+1)*patch_size] \
+                = small_images[idx]
+            else:
+                if row == row_max and col == col_max:
+                    combined_image[row*patch_size:, col*patch_size:] = \
+                    small_images[idx][-(image.shape[0] - row*patch_size):, -(image.shape[1] - col*patch_size):]
+                else:
+                    if col == col_max and row != row_max:
+                        combined_image[row*patch_size:(row+1)*patch_size, -(image.shape[1] - col*patch_size) :] = \
+                        small_images[idx][:, -(image.shape[1] - col*patch_size):]
+                        
+                    else:
+                        combined_image[-(image.shape[0] - row*patch_size) :, col*patch_size:(col+1)*patch_size] = \
+                        small_images[idx][-(image.shape[0] - row*patch_size):, : ]
+    combined_image = combined_image.astype(np.uint8)
+    plt.imshow(combined_image)
+    plt.imsave(os.path.join(separate_result_file,'pred_'+image_name+'_'+model_name+'.png'),combined_image)
+    return combined_image
 
-train_raster_path = '../data/dev/train/original/'
-train_vector_path = '../data/dev/train/binary/'
+def comp_mask_imgs(pred_result, vector_image, result_path, image_name, model_name, time_global):
+    """
+    Combine small masked patches into big one
+    Save big patches image
+    """
+    separate_result_file = os.path.join(result_path, time_global)
+    if not os.path.isdir(separate_result_file):
+        os.mkdir(separate_result_file)
+    rows=vector_image.shape[0]
+    cols=vector_image.shape[1]   
+    color_img=np.zeros((rows,cols,3))
+    nan_p=np.isnan(vector_image)
+    mask_img_r = np.zeros_like(vector_image)
+    mask_img_g = np.zeros_like(vector_image)
+    mask_img_b = np.zeros_like(vector_image)
+    mask_img_g[([pred_result==vector_image]&(pred_result==1)).reshape((rows,cols))]=1  #TP
+    color_img[:,:,1]=mask_img_g
+    mask_img_b[([pred_result!=vector_image]&(pred_result==1)).reshape((rows,cols))]=1  #FP
+    color_img[:,:,2]=mask_img_b
+    mask_img_r[([pred_result!=vector_image]&(pred_result==0)).reshape((rows,cols))]=1  #FN
+    color_img[:,:,0]=mask_img_r
+    color_img[nan_p,:]=0.5    # U-known
+    plt.imshow(color_img)
+    plt.imsave(os.path.join(separate_result_file,'masked_'+image_name+'_'+model_name+'.png'),color_img)
+    return color_img
 
-form = '*.tif'
-patch_size = 224
-# data_aug[0]: slide num, data_aug[2]: color aug, data_aug[3]: roate aug
-data_aug = 1000, 0.5, 0.5 
-vector_max = 255
-
-raster_images = image_read(train_raster_path, form)
-vector_images = image_read(train_vector_path, form) // vector_max
-  
-raster_patches, vector_patches = get_patches(raster_images, vector_images, data_aug,\
-                aug_random_slide = True, aug_color = True, aug_rotate = True, patch_size = patch_size)
- 
-            
+def main():
+    time_global = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M")
+    script_name = os.path.basename(__file__)
+    
+    train_raster_path = '../data/dev/train/original/'
+    train_vector_path = '../data/dev/train/binary/'
+    test_raster_path = '../data/dev/test/original/'
+    test_vector_path = '../data/dev/test/binary/'
+    model_path = '../model/'
+    result_path = '../result/'
+    
+    form = '*.tif'
+    patch_size = 224
+    # data_aug: slide num, color aug, rotate aug
+    data_aug = 1000, 0.5, 0.5 
+    vector_max = 255
+    batch_size = 32
+    cv_ratio = 0.2
+    nb_epoch = 200
+    N_Cls = 2
+    model_train = True
+    model_test = True
+    test_label = True
+    model_name = '2017-09-27-20-48'
+    
+    if model_train:
+        raster_images_train = train_image_read(train_raster_path, form)
+        vector_images_train = train_image_read(train_vector_path, form, vector_max, vector_read = True)
+        train_X, train_y = get_patches_train(raster_images_train, vector_images_train, data_aug,\
+                    aug_random_slide = True, aug_color = True, aug_rotate = True, patch_size = patch_size)
+        model_name = time_global
+        model = get_unet(patch_size, N_Cls)
+        train_begin = time.time()
+        History = model.fit(x = train_X, y = train_y, batch_size = batch_size, epochs = nb_epoch, verbose=1, validation_split=cv_ratio)               
+        time_train = (time.time()-train_begin)
+        save_model(model, model_path, model_name)
+        acc_loss_visual(History.history, result_path, script_name, model_name, time_global)
+        del raster_images_train, vector_images_train
+        gc.collect()
+    else:
+        model = read_model(model_path, model_name)
+    
+    if model_test:
+        test_image_num = len(glob.glob(test_raster_path+form))
+        iou_list = []
+        acc_list = []
+        name_list = []
+        test_time = []
+        image_shape_list = []
+        if test_label:
+            for idx_img in range(test_image_num):
+                raster_image_test, image_name = test_image_read(test_raster_path, form, idx_img, name_read = True)
+                image_shape = raster_image_test.shape
+                image_shape_list.append(image_shape)
+                name_list.append(image_name)
+                vector_image_test = test_image_read(test_vector_path, form, idx_img, vector_max, vector_read = True)
+                print('Start testing image {}/{}: {}'.format((idx_img + 1), test_image_num, image_name))
+                test_X, test_y = get_patches_test_with_label(raster_image_test, vector_image_test, patch_size = patch_size)        
+                test_y = np.argmax(test_y, axis = -1)            
+                test_beg = time.time()
+                pred_y = image_test(model, test_X)
+                time_test = (time.time() - test_beg)
+                test_time.append(time_test)
+                #calculate IoU and Acc of each patch respectively 
+                result_dict = patch_evaluate(pred_y, image_name, test_y)
+                #calculate IoU and Acc of the whole  
+                print('           result in all')
+                pred_result = patch_combine(vector_image_test, pred_y, patch_size, result_path, time_global, image_name, model_name)
+                comp_mask_imgs(vector_image_test, pred_result, result_path, image_name, model_name, time_global)
+                iou = intersection_over_union(vector_image_test, pred_result, smooth)
+                iou_list.append(iou)
+                acc = overall_accuracy(vector_image_test, pred_result)
+                acc_list.append(acc)
+                patch_result_save(result_dict, result_path, time_global, model_name, image_name)
+                del result_dict, raster_image_test, pred_y
+                gc.collect()
+        else:           
+            for idx_img in range(test_image_num):
+                raster_image_test, image_name = test_image_read(test_raster_path, form, idx_img, name_read = True)
+                image_shape = raster_image_test.shape
+                image_shape_list.append(image_shape)
+                test_X = get_patches_test_without_label(raster_image_test, patch_size = patch_size)
+                name_list.append(image_name)
+                print('Start testing image: {}'.format(image_name))
+                test_beg = time.time()
+                pred_y = image_test(model, test_X)
+                time_test = (time.time() - test_beg)
+                test_time.append(time_test) 
+                result_dict = patch_evaluate(pred_y, image_name, test_label = False)
+                print('           result in all:')            
+                pred_result = patch_combine(raster_image_test, pred_y, patch_size, result_path, time_global, image_name, model_name)        
+                patch_result_save(result_dict, result_path, time_global, model_name, image_name)                      
+                del result_dict, raster_image_test, pred_y
+                gc.collect()
+    ###################################### log #############################################
+    if model_train and model_test:
+        if test_label:
+            log_write(result_path, time_global, script_name,  patch_size, N_Cls, batch_size, \
+                          nb_epoch, cv_ratio, model, model_name, \
+                          train_X.shape[0], time_train, History, name_list, image_shape_list, test_time, iou_list, acc_list, \
+                          train_mode = True, test_mode = True, label_mode = True)
+        else:
+            log_write(result_path, time_global, script_name,  patch_size, N_Cls, batch_size, \
+                          nb_epoch, cv_ratio, model, model_name, \
+                          train_X.shape[0], time_train, History, name_list, image_shape_list, test_time, \
+                          train_mode = True, test_mode = True)
+    
+    elif model_train and not model_test:
+            log_write(result_path, time_global, script_name,  patch_size, N_Cls, batch_size, \
+                          nb_epoch, cv_ratio, model, model_name, \
+                          train_X.shape[0], time_train, History,\
+                          train_mode = True)
         
-        
+    else:
+        if test_label:
+            log_write(result_path, time_global, script_name,  patch_size, N_Cls, batch_size, \
+                          nb_epoch, cv_ratio, model, model_name, \
+                          0,0,0,name_list, image_shape_list, test_time, iou_list, acc_list, \
+                          test_mode = True, label_mode = True)
+        else:
+            log_write(result_path, time_global, script_name,  patch_size, N_Cls, batch_size, \
+                          nb_epoch, cv_ratio, model, model_name, \
+                          0,0,0, name_list, image_shape_list, test_time, \
+                          test_mode = True)        
+
+if __name__ == '__main__':
+    main()
+else:
+    print('Hello')
+#    
+
+
+
+
 
