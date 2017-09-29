@@ -6,7 +6,7 @@ Created on Mon Sep 25 15:50:45 2017
 @author: kaku
 """
 import numpy as np
-import random
+import random, gc
 from keras.utils import np_utils
 
 def get_patches_train(raster_images,  vector_images, *args, aug_random_slide = False, aug_color = False, aug_rotate = False, **kwargs):
@@ -98,6 +98,8 @@ def get_patches_train(raster_images,  vector_images, *args, aug_random_slide = F
             vector_patch_array = np.asarray(vector_patch_list)
             # change 3dim y into 4dim
             vector_patch_array = np_utils.to_categorical(vector_patch_array, 2).reshape(vector_patch_array.shape[0],patch_size, -1, 2)
+    del raster_image, vector_image
+    gc.collect() 
     return raster_patch_array, vector_patch_array
 
 
@@ -151,8 +153,8 @@ def get_patches_test_with_label(raster_image, vector_image, *args, **kwargs):
     raster_patch_array = np.asarray(raster_patch_list)
     vector_patch_array = np.asarray(vector_patch_list)
     vector_patch_array = np_utils.to_categorical(vector_patch_array, 2).reshape(vector_patch_array.shape[0],patch_size, -1,2)
-    
-        
+    del raster_image, vector_image
+    gc.collect()            
     return raster_patch_array, vector_patch_array
 
 def get_patches_test_without_label(raster_image, *args, **kwargs):
@@ -192,39 +194,11 @@ def get_patches_test_without_label(raster_image, *args, **kwargs):
                 raster_patch = raster_image[i*patch_size:(i+1)*patch_size, j*patch_size:(j+1)*patch_size]
             raster_patch_list.append(raster_patch)
             raster_patch_array = np.asarray(raster_patch_list)
+            del raster_image
+            gc.collect()
     return raster_patch_array
 
 
-
-
-#    patch_size = kwargs['patch_size']
-#    
-#    image_num = len(raster_images)
-#    test_raster_images_list = []
-#
-#    print('Obtain data from:')
-#    for img_idx in range(image_num):
-#        print('             the {}th testing image.'.format(img_idx+1))
-#        raster_patch_list = []
-#        raster_image = raster_images[img_idx]
-#        rows_num, cols_num = int(np.ceil(raster_image.shape[0]/patch_size)), int(np.ceil(raster_image.shape[1]/patch_size))
-#        rows_max, cols_max = rows_num - 1, cols_num -1
-#        for i in range(rows_num):
-#            for j in range(cols_num):
-#                if i == rows_max and j == cols_max:
-#                    raster_patch = raster_image[-patch_size:, -patch_size:]
-#                elif j == cols_max:
-#                    raster_patch = raster_image[i*patch_size:(i+1)*patch_size, -patch_size:]
-#                elif i == rows_max:
-#                    raster_patch = raster_image[-patch_size:, j*patch_size:(j+1)*patch_size]
-#                else:
-#                    raster_patch = raster_image[i*patch_size:(i+1)*patch_size, j*patch_size:(j+1)*patch_size]
-#
-#                raster_patch_list.append(raster_patch)
-#
-#        raster_patch_array = np.asarray(raster_patch_list)
-#        test_raster_images_list.append(raster_patch_array)
-#    return test_raster_images_list
 
 if __name__ == '__main__':
     print('patch_obtain.py')

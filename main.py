@@ -52,6 +52,8 @@ def train_image_read(path, form, *args, vector_read = False, name_read=False):
     for img_name in image_names:
         image = tiff.imread(img_name)
         image_list.append(image)
+        del image
+        gc.collect()
     if vector_read:
         image_list = list(map(lambda x: x // args[0], image_list))        
     if name_read == False:
@@ -90,9 +92,7 @@ def jaccard_coef(y_true, y_pred):
 
     intersection = K.sum(y_true * y_pred, axis=[0, -1, -2])
     sum_ = K.sum(y_true + y_pred, axis=[0, -1, -2])
-
     jac = (intersection + smooth) / (sum_ - intersection + smooth)
-
     return K.mean(jac)
 
 def jaccard_coef_int(y_true, y_pred):
@@ -237,7 +237,8 @@ def patch_evaluate(pred_y, image_name, *args, test_label = True):
     else:
         dic_info = {'name': image_name, 
            'patch_num': len(pred_y), 
-           'pred_y': pred_y}        
+           'time': test_time,
+           'pred_y': pred_y}
     return dic_info
 
 def patch_result_save(pred_result, result_path, time_global, model_name, image_name):
@@ -245,6 +246,8 @@ def patch_result_save(pred_result, result_path, time_global, model_name, image_n
     if not os.path.isdir(separate_result_file):
         os.mkdir(separate_result_file)
     np.save(os.path.join(separate_result_file,'patch_'+ image_name + '_'+ model_name+'_.npy'), pred_result)
+    del pred_result
+    gc.collect()
 
 
 def patch_combine(image, small_images, patch_size, result_path, time_global, image_name, model_name):
@@ -295,6 +298,8 @@ def patch_combine(image, small_images, patch_size, result_path, time_global, ima
     combined_image = combined_image.astype(np.uint8)
     plt.imshow(combined_image)
     plt.imsave(os.path.join(separate_result_file,'pred_'+image_name+'_'+model_name+'.png'),combined_image)
+    del small_images
+    gc.collect()
     return combined_image
 
 def comp_mask_imgs(pred_result, vector_image, result_path, image_name, model_name, time_global):
@@ -321,6 +326,8 @@ def comp_mask_imgs(pred_result, vector_image, result_path, image_name, model_nam
     color_img[nan_p,:]=0.5    # U-known
     plt.imshow(color_img)
     plt.imsave(os.path.join(separate_result_file,'masked_'+image_name+'_'+model_name+'.png'),color_img)
+    del pred_result, vector_image
+    gc.collect()
     return color_img
 
 def main():
@@ -341,18 +348,19 @@ def main():
     vector_max = 255
     batch_size = 32
     cv_ratio = 0.2
-    nb_epoch = 200
+    nb_epoch = 1
     N_Cls = 2
     model_train = True
     model_test = True
     test_label = True
-    model_name = '2017-09-27-20-48'
+    model_name = '2017-09-27-21-51'
     
     if model_train:
         raster_images_train = train_image_read(train_raster_path, form)
         vector_images_train = train_image_read(train_vector_path, form, vector_max, vector_read = True)
         train_X, train_y = get_patches_train(raster_images_train, vector_images_train, data_aug,\
                     aug_random_slide = True, aug_color = True, aug_rotate = True, patch_size = patch_size)
+        sample_num = train_X.shape[0]
         model_name = time_global
         model = get_unet(patch_size, N_Cls)
         train_begin = time.time()
@@ -360,7 +368,7 @@ def main():
         time_train = (time.time()-train_begin)
         save_model(model, model_path, model_name)
         acc_loss_visual(History.history, result_path, script_name, model_name, time_global)
-        del raster_images_train, vector_images_train
+        del raster_images_train, vector_images_train, train_X, train_y
         gc.collect()
     else:
         model = read_model(model_path, model_name)
@@ -397,7 +405,7 @@ def main():
                 acc = overall_accuracy(vector_image_test, pred_result)
                 acc_list.append(acc)
                 patch_result_save(result_dict, result_path, time_global, model_name, image_name)
-                del result_dict, raster_image_test, pred_y
+                del result_dict, raster_image_test, pred_y, vector_image_test, pred_result, test_X, test_y
                 gc.collect()
         else:           
             for idx_img in range(test_image_num):
@@ -415,25 +423,25 @@ def main():
                 print('           result in all:')            
                 pred_result = patch_combine(raster_image_test, pred_y, patch_size, result_path, time_global, image_name, model_name)        
                 patch_result_save(result_dict, result_path, time_global, model_name, image_name)                      
-                del result_dict, raster_image_test, pred_y
+                del result_dict, raster_image_test, pred_y, pred_result, test_X
                 gc.collect()
     ###################################### log #############################################
     if model_train and model_test:
         if test_label:
             log_write(result_path, time_global, script_name,  patch_size, N_Cls, batch_size, \
                           nb_epoch, cv_ratio, model, model_name, \
-                          train_X.shape[0], time_train, History, name_list, image_shape_list, test_time, iou_list, acc_list, \
+                          sample_num, time_train, History, name_list, image_shape_list, test_time, iou_list, acc_list, \
                           train_mode = True, test_mode = True, label_mode = True)
         else:
             log_write(result_path, time_global, script_name,  patch_size, N_Cls, batch_size, \
                           nb_epoch, cv_ratio, model, model_name, \
-                          train_X.shape[0], time_train, History, name_list, image_shape_list, test_time, \
+                          sample_num, time_train, History, name_list, image_shape_list, test_time, \
                           train_mode = True, test_mode = True)
     
     elif model_train and not model_test:
             log_write(result_path, time_global, script_name,  patch_size, N_Cls, batch_size, \
                           nb_epoch, cv_ratio, model, model_name, \
-                          train_X.shape[0], time_train, History,\
+                          sample_num, time_train, History,\
                           train_mode = True)
         
     else:
@@ -447,12 +455,11 @@ def main():
                           nb_epoch, cv_ratio, model, model_name, \
                           0,0,0, name_list, image_shape_list, test_time, \
                           test_mode = True)        
-
 if __name__ == '__main__':
     main()
 else:
     print('Hello')
-#    
+    
 
 
 
