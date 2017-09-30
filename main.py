@@ -14,16 +14,14 @@ import gc
 
 from plot_learning_curves import acc_loss_visual
 from patch_obtain import get_patches_train, get_patches_test_with_label, get_patches_test_without_label
-from result_evaluate import intersection_over_union, overall_accuracy
+#from models import unet, unet_deconv, unet_norm
+import models
+
+from result_evaluate import intersection_over_union, overall_accuracy, kappa_coef
 from log_writing import log_write
 
-from keras.models import Model
-from keras.layers import Input, MaxPooling2D, UpSampling2D
-from keras.layers.merge import concatenate
-from keras.layers.convolutional import Conv2D
-from keras.optimizers import Adam
+
 from keras.models import model_from_json
-from keras import backend as K
 
 #import gc
 
@@ -88,75 +86,6 @@ def test_image_read(path, form, idx, *args, vector_read = False, name_read=False
     else:
         return image, os.path.basename(image_name)[:-4]
 
-def jaccard_coef(y_true, y_pred):
-
-    intersection = K.sum(y_true * y_pred, axis=[0, -1, -2])
-    sum_ = K.sum(y_true + y_pred, axis=[0, -1, -2])
-    jac = (intersection + smooth) / (sum_ - intersection + smooth)
-    return K.mean(jac)
-
-def jaccard_coef_int(y_true, y_pred):
-
-    y_pred_pos = K.round(K.clip(y_pred, 0, 1))
-
-    intersection = K.sum(y_true * y_pred_pos, axis=[0, -1, -2])
-    sum_ = K.sum(y_true + y_pred_pos, axis=[0, -1, -2])
-    jac = (intersection + smooth) / (sum_ - intersection + smooth)
-    return K.mean(jac)
-
-def get_unet(patch_size, N_Cls):
-    """
-    Build a mini U-Net architecture
-    Return U-Net model
-    
-    Notes
-    -----
-    Shape of output image is similar with input image
-    Output img bands: N_Cls
-    Upsampling is important
-#    """
-    ISZ = patch_size    
-    inputs = Input((ISZ, ISZ, 3))
-    conv1 = Conv2D(32, (3, 3), activation='relu', padding='same')(inputs)
-    conv1 = Conv2D(32, (3, 3), activation='relu', padding='same')(conv1)
-    pool1 = MaxPooling2D(pool_size=(2, 2))(conv1)
-
-    conv2 = Conv2D(64, (3, 3), activation='relu', padding='same')(pool1)
-    conv2 = Conv2D(64, (3, 3), activation='relu', padding='same')(conv2)
-    pool2 = MaxPooling2D(pool_size=(2, 2))(conv2)
-
-    conv3 = Conv2D(128, (3, 3), activation='relu', padding='same')(pool2)
-    conv3 = Conv2D(128, (3, 3), activation='relu', padding='same')(conv3)
-    pool3 = MaxPooling2D(pool_size=(2, 2))(conv3)
-
-    conv4 = Conv2D(256, (3, 3), activation='relu', padding='same')(pool3)
-    conv4 = Conv2D(256, (3, 3), activation='relu', padding='same')(conv4)
-    pool4 = MaxPooling2D(pool_size=(2, 2))(conv4)
-
-    conv5 = Conv2D(512, (3, 3), activation='relu', padding='same')(pool4)
-    conv5 = Conv2D(512, (3, 3), activation='relu', padding='same')(conv5)
-
-    up6 = concatenate([UpSampling2D(size=(2, 2))(conv5), conv4], axis=3)
-    conv6 = Conv2D(256, (3, 3), activation='relu', padding='same')(up6)
-    conv6 = Conv2D(256, (3, 3), activation='relu', padding='same')(conv6)
-    
-    up7 = concatenate([UpSampling2D(size=(2, 2))(conv6), conv3], axis=3)
-    conv7 = Conv2D(128, (3, 3), activation='relu', padding='same')(up7)
-    conv7 = Conv2D(128, (3, 3), activation='relu', padding='same')(conv7)
-
-    up8 = concatenate([UpSampling2D(size=(2, 2))(conv7), conv2], axis=3)
-    conv8 = Conv2D(64, (3, 3), activation='relu', padding='same')(up8)
-    conv8 = Conv2D(64, (3, 3), activation='relu', padding='same')(conv8)
-
-    up9 = concatenate([UpSampling2D(size=(2, 2))(conv8), conv1], axis=3)
-    conv9 = Conv2D(32, (3, 3), activation='relu', padding='same')(up9)
-    conv9 = Conv2D(32, (3, 3), activation='relu', padding='same')(conv9)
-
-    conv10 = Conv2D(N_Cls, (1, 1), activation='softmax')(conv9)
-    model = Model(inputs=inputs, outputs=conv10)
-    model.compile(optimizer=Adam(), loss='binary_crossentropy', metrics=[jaccard_coef, jaccard_coef_int, 'accuracy'])
-    return model  
-
 def save_model(model, model_path, file_time_global):
     """
     Save model into model_path
@@ -218,13 +147,16 @@ def patch_evaluate(pred_y, image_name, *args, test_label = True):
         test_y = args[0]
         i_o_u_list = []
         acc_list = []
+        kappa_list = []
         test_time = []
         for idx_patch in range(test_y.shape[0]):
             beg = time.time()
             i_o_u = intersection_over_union(test_y[idx_patch], pred_y[idx_patch], smooth)
             acc = overall_accuracy(test_y[idx_patch], pred_y[idx_patch])
+            kappa = kappa_coef(test_y[idx_patch], pred_y[idx_patch]) 
             i_o_u_list.append(i_o_u)
             acc_list.append(acc)
+            kappa_list.append(kappa)
             time_test = (time.time() - beg)
             test_time.append(time_test)
         dic_info = {'name': image_name, 
@@ -232,6 +164,7 @@ def patch_evaluate(pred_y, image_name, *args, test_label = True):
            'time': test_time,
            'IoU': i_o_u_list,
            'Accuracy': acc_list,
+           'Kappa': kappa_list,
            'pred_y': pred_y,
            'test_y': test_y}
     else:
@@ -320,9 +253,9 @@ def comp_mask_imgs(pred_result, vector_image, result_path, image_name, model_nam
     mask_img_g[([pred_result==vector_image]&(pred_result==1)).reshape((rows,cols))]=1  #TP
     color_img[:,:,1]=mask_img_g
     mask_img_b[([pred_result!=vector_image]&(pred_result==1)).reshape((rows,cols))]=1  #FP
-    color_img[:,:,2]=mask_img_b
+    color_img[:,:,0]=mask_img_b
     mask_img_r[([pred_result!=vector_image]&(pred_result==0)).reshape((rows,cols))]=1  #FN
-    color_img[:,:,0]=mask_img_r
+    color_img[:,:,2]=mask_img_r
     color_img[nan_p,:]=0.5    # U-known
     plt.imshow(color_img)
     plt.imsave(os.path.join(separate_result_file,'masked_'+image_name+'_'+model_name+'.png'),color_img)
@@ -344,7 +277,7 @@ def main():
     form = '*.tif'
     patch_size = 224
     # data_aug: slide num, color aug, rotate aug
-    data_aug = 1000, 0.5, 0.5 
+    data_aug = 100, 0.5, 0.5 
     vector_max = 255
     batch_size = 32
     cv_ratio = 0.2
@@ -353,8 +286,10 @@ def main():
     model_train = True
     model_test = True
     test_label = True
+    get_model = models.unet_norm
     model_name = '2017-09-27-21-51'
     
+    MODEL_TYPE = get_model.__name__
     if model_train:
         raster_images_train = train_image_read(train_raster_path, form)
         vector_images_train = train_image_read(train_vector_path, form, vector_max, vector_read = True)
@@ -362,7 +297,7 @@ def main():
                     aug_random_slide = True, aug_color = True, aug_rotate = True, patch_size = patch_size)
         sample_num = train_X.shape[0]
         model_name = time_global
-        model = get_unet(patch_size, N_Cls)
+        model = get_model(patch_size, N_Cls)
         train_begin = time.time()
         History = model.fit(x = train_X, y = train_y, batch_size = batch_size, epochs = nb_epoch, verbose=1, validation_split=cv_ratio)               
         time_train = (time.time()-train_begin)
@@ -377,6 +312,7 @@ def main():
         test_image_num = len(glob.glob(test_raster_path+form))
         iou_list = []
         acc_list = []
+        kappa_list = []
         name_list = []
         test_time = []
         image_shape_list = []
@@ -404,6 +340,8 @@ def main():
                 iou_list.append(iou)
                 acc = overall_accuracy(vector_image_test, pred_result)
                 acc_list.append(acc)
+                kappa = kappa_coef(vector_image_test, pred_result)
+                kappa_list.append(kappa)
                 patch_result_save(result_dict, result_path, time_global, model_name, image_name)
                 del result_dict, raster_image_test, pred_y, vector_image_test, pred_result, test_X, test_y
                 gc.collect()
@@ -429,30 +367,30 @@ def main():
     if model_train and model_test:
         if test_label:
             log_write(result_path, time_global, script_name,  patch_size, N_Cls, batch_size, \
-                          nb_epoch, cv_ratio, model, model_name, \
-                          sample_num, time_train, History, name_list, image_shape_list, test_time, iou_list, acc_list, \
+                          nb_epoch, cv_ratio, model, model_name, MODEL_TYPE,\
+                          sample_num, time_train, History, name_list, image_shape_list, test_time, iou_list, acc_list, kappa_list,\
                           train_mode = True, test_mode = True, label_mode = True)
         else:
             log_write(result_path, time_global, script_name,  patch_size, N_Cls, batch_size, \
-                          nb_epoch, cv_ratio, model, model_name, \
+                          nb_epoch, cv_ratio, model, model_name, MODEL_TYPE,\
                           sample_num, time_train, History, name_list, image_shape_list, test_time, \
                           train_mode = True, test_mode = True)
     
     elif model_train and not model_test:
             log_write(result_path, time_global, script_name,  patch_size, N_Cls, batch_size, \
-                          nb_epoch, cv_ratio, model, model_name, \
+                          nb_epoch, cv_ratio, model, model_name, MODEL_TYPE,\
                           sample_num, time_train, History,\
                           train_mode = True)
         
     else:
         if test_label:
             log_write(result_path, time_global, script_name,  patch_size, N_Cls, batch_size, \
-                          nb_epoch, cv_ratio, model, model_name, \
-                          0,0,0,name_list, image_shape_list, test_time, iou_list, acc_list, \
+                          nb_epoch, cv_ratio, model, model_name, MODEL_TYPE,\
+                          0,0,0,name_list, image_shape_list, test_time, iou_list, acc_list, kappa_list,\
                           test_mode = True, label_mode = True)
         else:
             log_write(result_path, time_global, script_name,  patch_size, N_Cls, batch_size, \
-                          nb_epoch, cv_ratio, model, model_name, \
+                          nb_epoch, cv_ratio, model, model_name, MODEL_TYPE,\
                           0,0,0, name_list, image_shape_list, test_time, \
                           test_mode = True)        
 if __name__ == '__main__':
