@@ -9,7 +9,7 @@ import os, sys
 import numpy as np
 
 def log_write(result_path, time_global, script_name,  PATCH_SIZE, N_ClASS, BATCH_SIZE,\
-              EPOCH, CV_RATIO, model, model_name, \
+              EPOCH, CV_RATIO, model, model_name, model_type,\
               *args, \
               train_mode = False, test_mode = False, label_mode = False):
     stdout = sys.stdout
@@ -21,6 +21,7 @@ def log_write(result_path, time_global, script_name,  PATCH_SIZE, N_ClASS, BATCH
     print('########################Time: '+time_global+'########################')
     print('############################File: '+script_name+'########################')
     if train_mode:
+        print('Model type: {}'.format(model_type))
         print('Training sample size: '+''+str(PATCH_SIZE)+' x '+str(PATCH_SIZE))
         TRINING_SAMPLES = args[0]
         time_train = args[1]
@@ -48,6 +49,7 @@ def log_write(result_path, time_global, script_name,  PATCH_SIZE, N_ClASS, BATCH
             test_time = args[5]
             inter_over_unions_list = args[6]
             accuracy_list = args[7]
+            kappa_list = args[8]
             
             print('Testing image pieces: '+str(len(image_shape_list)))
             for i in range(len(image_shape_list)):
@@ -55,9 +57,9 @@ def log_write(result_path, time_global, script_name,  PATCH_SIZE, N_ClASS, BATCH
                 print('       Testing image size: ' + str(image_shape_list[i][0])+' x '+ str(image_shape_list[i][1]))
                 print('       Testing_time: '+ str(test_time[i])+'    Every image:'+str((test_time[i])/len(image_shape_list)))
                 print("       Testing result:")
-                print("             IoU: "+'%.2f'%(inter_over_unions_list[i]*100)+r'%'+ '   Acc: '+ '%.2f'%(accuracy_list[i]*100)+r'%')
+                print("             IoU: "+'%.2f'%(inter_over_unions_list[i]*100)+r'%'+ '   Acc: '+ '%.2f'%(accuracy_list[i]*100)+r'%'+ '   Kappa: '+ '%.2f'%(kappa_list[i]))
             
-            print("Mean IoU: "+'%.2f'%(np.mean(inter_over_unions_list)*100)+r'%'+ '   Acc: '+ '%.2f'%(np.mean(accuracy_list)*100)+r'%')        
+            print("Mean IoU: "+'%.2f'%(np.mean(inter_over_unions_list)*100)+r'%'+ '   Acc: '+ '%.2f'%(np.mean(accuracy_list)*100)+r'%'+ '   Kappa: '+ '%.2f'%(np.mean(kappa_list)))        
         else:
             test_images_name = args[3]
             image_shape_list = args[4]
