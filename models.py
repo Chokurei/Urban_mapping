@@ -181,6 +181,7 @@ def unet_deconv(patch_size, N_Cls):
     return model
 
 if __name__ == '__main__':
-    print('Different models can be loaded.')
-else:
     print('Hello!')
+else:
+    print('Different models can be loaded.')
+    

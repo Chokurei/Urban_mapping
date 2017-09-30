@@ -277,11 +277,11 @@ def main():
     form = '*.tif'
     patch_size = 224
     # data_aug: slide num, color aug, rotate aug
-    data_aug = 100, 0.5, 0.5 
+    data_aug = 1000, 0.5, 0.5 
     vector_max = 255
     batch_size = 32
     cv_ratio = 0.2
-    nb_epoch = 1
+    nb_epoch = 200
     N_Cls = 2
     model_train = True
     model_test = True
