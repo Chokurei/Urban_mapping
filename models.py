@@ -71,6 +71,7 @@ def unet(patch_size, N_Cls):
 def unet_norm(patch_size, N_Cls):
     """
     Build a mini U-Net architecture
+    Add batch normalization method
     Return U-Net model
     
     Notes
@@ -185,3 +186,8 @@ if __name__ == '__main__':
 else:
     print('Different models can be loaded.')
     
+
+
+
+
+

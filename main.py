@@ -283,11 +283,12 @@ def main():
     cv_ratio = 0.2
     nb_epoch = 200
     N_Cls = 2
-    model_train = True
+    model_train = False
     model_test = True
     test_label = True
-    get_model = models.unet_norm
-    model_name = '2017-09-27-21-51'
+    get_model = models.unet_deconv
+    model_name = '2017-10-01-11-49'
+    gc.enable()
     
     MODEL_TYPE = get_model.__name__
     if model_train:
@@ -392,9 +393,10 @@ def main():
             log_write(result_path, time_global, script_name,  patch_size, N_Cls, batch_size, \
                           nb_epoch, cv_ratio, model, model_name, MODEL_TYPE,\
                           0,0,0, name_list, image_shape_list, test_time, \
-                          test_mode = True)        
+                          test_mode = True)  
 if __name__ == '__main__':
     main()
+    gc.collect()
 else:
     print('Hello')
     
