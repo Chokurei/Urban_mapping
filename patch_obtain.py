@@ -98,7 +98,7 @@ def get_patches_train(raster_images,  vector_images, *args, aug_random_slide = F
             vector_patch_array = np.asarray(vector_patch_list)
             # change 3dim y into 4dim
             vector_patch_array = np_utils.to_categorical(vector_patch_array, 2).reshape(vector_patch_array.shape[0],patch_size, -1, 2)
-    del raster_image, vector_image
+#    del raster_image, vector_image
     gc.collect() 
     return raster_patch_array, vector_patch_array
 
@@ -194,7 +194,6 @@ def get_patches_test_without_label(raster_image, *args, **kwargs):
                 raster_patch = raster_image[i*patch_size:(i+1)*patch_size, j*patch_size:(j+1)*patch_size]
             raster_patch_list.append(raster_patch)
             raster_patch_array = np.asarray(raster_patch_list)
-            del raster_image
             gc.collect()
     return raster_patch_array
 

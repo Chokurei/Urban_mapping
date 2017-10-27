@@ -14,16 +14,14 @@ import gc
 
 from plot_learning_curves import acc_loss_visual
 from patch_obtain import get_patches_train, get_patches_test_with_label, get_patches_test_without_label
-#from models import unet, unet_deconv, unet_norm
 import models
 
 from result_evaluate import intersection_over_union, overall_accuracy, kappa_coef
 from log_writing import log_write
 
-
 from keras.models import model_from_json
 
-#import gc
+
 
 smooth = 1e-12
 
@@ -170,7 +168,6 @@ def patch_evaluate(pred_y, image_name, *args, test_label = True):
     else:
         dic_info = {'name': image_name, 
            'patch_num': len(pred_y), 
-           'time': test_time,
            'pred_y': pred_y}
     return dic_info
 
@@ -353,7 +350,7 @@ def main():
                 image_shape_list.append(image_shape)
                 test_X = get_patches_test_without_label(raster_image_test, patch_size = patch_size)
                 name_list.append(image_name)
-                print('Start testing image: {}'.format(image_name))
+                print('Start testing image {}/{}: {}'.format((idx_img + 1), test_image_num, image_name))
                 test_beg = time.time()
                 pred_y = image_test(model, test_X)
                 time_test = (time.time() - test_beg)
